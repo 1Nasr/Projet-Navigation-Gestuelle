@@ -37,7 +37,15 @@ COOLDOWN = 1.2           # secondes
 last_swipe_time_left = 0
 last_swipe_time_right = 0
 
+SCREEN_W, SCREEN_H = pyautogui.size()
 
+def is_index_up(hand):
+    index_up  = hand[8].y < hand[6].y   # index levé
+    middle_down = hand[12].y > hand[10].y  # majeur fermé
+    ring_down   = hand[16].y > hand[14].y  # annulaire fermé
+    pinky_down  = hand[20].y > hand[18].y  # auriculaire fermé
+    return index_up and middle_down and ring_down and pinky_down
+    
 # ===============================
 # Callback
 # ===============================
@@ -114,6 +122,17 @@ with HandLandmarker.create_from_options(options) as landmarker:
                         print("⬅ Swipe détecté : DROITE → GAUCHE")
                         last_swipe_time_right = now
                         positions.clear()
+                
+                if is_index_up(hand):
+                    # Position du bout de l'index (landmark 8)
+                    index_tip = hand[8]
+                    
+                    # Mapper les coords webcam (0.0→1.0) vers l'écran
+                    screen_x = int((1 - index_tip.x) * SCREEN_W)  # miroir horizontal
+                    screen_y = int(index_tip.y * SCREEN_H)
+                    
+                    pyautogui.moveTo(screen_x, screen_y, duration=0)
+                    swipe_text = "POINTEUR ACTIF"
 
         else:
             positions.clear()
