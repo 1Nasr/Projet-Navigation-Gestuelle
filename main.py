@@ -32,9 +32,11 @@ positions = deque(maxlen=8)  # (x, y, time)
 MIN_FRAMES = 3
 SWIPE_DISTANCE = 0.08     # 8% largeur pour détecter dès petit mouvement
 MAX_TIME = 0.4            # secondes
-COOLDOWN = 0.5            # secondes
+COOLDOWN = 1.2           # secondes
 
-last_swipe_time = 0
+last_swipe_time_left = 0
+last_swipe_time_right = 0
+
 
 # ===============================
 # Callback
@@ -85,12 +87,13 @@ with HandLandmarker.create_from_options(options) as landmarker:
             for s, e in HAND_CONNECTIONS:
                 cv2.line(frame, (int(hand[s].x*w), int(hand[s].y*h)), (int(hand[e].x*w), int(hand[e].y*h)), (255,0,0), 2)
 
+
             # Position poignet
             poignet = hand[0]
             positions.append((poignet.x, now))
 
             # Détection swipe dès que dx dépasse seuil
-            if len(positions) >= MIN_FRAMES and now - last_swipe_time > COOLDOWN:
+            if len(positions) >= MIN_FRAMES:
                 # ici detection de la premiere frame et de la derniere recuper et comparaison de la distance
                 x_old, t_old = positions[0]
                 x_new, t_new = positions[-1]
@@ -99,18 +102,18 @@ with HandLandmarker.create_from_options(options) as landmarker:
                 dt = t_new - t_old
 
                 if abs(dx) > SWIPE_DISTANCE and dt < MAX_TIME:
-                    # si le dx est positif alors la main provient de la droite donc on fait flèche de gauche 
-                    if dx > 0:
-                        swipe_text = "SWIPE DROITE -> GAUCHE" 
-                        pyautogui.press('left') 
+                    if dx > 0 and now - last_swipe_time_left > COOLDOWN:
+                        swipe_text = "SWIPE DROITE -> GAUCHE"
+                        pyautogui.press('left')
                         print("➡ Swipe détecté : GAUCHE → DROITE")
-                    else:
+                        last_swipe_time_left = now
+                        positions.clear()
+                    elif dx < 0 and now - last_swipe_time_right > COOLDOWN:
                         swipe_text = "SWIPE GAUCHE -> DROITE"
                         pyautogui.press('right')
                         print("⬅ Swipe détecté : DROITE → GAUCHE")
-
-                    last_swipe_time = now
-                    positions.clear()
+                        last_swipe_time_right = now
+                        positions.clear()
 
         else:
             positions.clear()
