@@ -40,14 +40,21 @@ last_swipe_time_right = 0
 SCREEN_W, SCREEN_H = pyautogui.size()
 
 # Parametres pointeur pour fluidite
-LISSAGE_POINTEUR = 0.25      # 0..1, plus grand = plus reactif
-ZONE_MORTE_POINTEUR_PX = 3       # ignore micro mouvements pour eviter le jitter
-INTERVALLE_MAJ_POINTEUR = 0.01  # 100 Hz max
-NB_FRAMES_INDEX_STABLE = 2
+LISSAGE_POINTEUR = 0.35      # 0..1, plus grand = plus reactif
+LISSAGE_POINTEUR_RAPIDE = 0.6
+SEUIL_ACCELERATION_PX = 40
+ZONE_MORTE_POINTEUR_PX = 2       # ignore micro mouvements pour eviter le jitter
+INTERVALLE_MAJ_POINTEUR = 0.005  # 200 Hz max
+NB_FRAMES_INDEX_STABLE = 1
+NB_FRAMES_POING_MODE = 4
+COOLDOWN_CHANGEMENT_MODE = 0.8
 
 derniere_position_pointeur = None
 dernier_maj_pointeur = 0.0
 serie_index_leve = 0
+mode_actif = "swipe"
+compteur_poing_ferme = 0
+dernier_changement_mode = 0.0
 
 pyautogui.PAUSE = 0
 
@@ -57,6 +64,13 @@ def is_index_up(hand):
     ring_down   = hand[16].y > hand[14].y  # annulaire fermé
     pinky_down  = hand[20].y > hand[18].y  # auriculaire fermé
     return index_up and middle_down and ring_down and pinky_down
+
+def is_fist_closed(hand):
+    index_down = hand[8].y > hand[6].y
+    middle_down = hand[12].y > hand[10].y
+    ring_down = hand[16].y > hand[14].y
+    pinky_down = hand[20].y > hand[18].y
+    return index_down and middle_down and ring_down and pinky_down
     
 # ===============================
 # Callback
@@ -101,6 +115,25 @@ with HandLandmarker.create_from_options(options) as landmarker:
 
         if last_result and last_result.hand_landmarks:
             hand = last_result.hand_landmarks[0]
+            index_en_haut = is_index_up(hand)
+            poing_ferme = is_fist_closed(hand)
+            poignet = hand[0]
+
+            # Changement de mode avec poing ferme
+            if poing_ferme:
+                compteur_poing_ferme += 1
+            else:
+                compteur_poing_ferme = 0
+
+            if (
+                compteur_poing_ferme >= NB_FRAMES_POING_MODE
+                and (now - dernier_changement_mode) >= COOLDOWN_CHANGEMENT_MODE
+            ):
+                mode_actif = "pointeur" if mode_actif == "swipe" else "swipe"
+                dernier_changement_mode = now
+                compteur_poing_ferme = 0
+                positions.clear()
+                serie_index_leve = 0
 
             # Dessin des lignes et points sur l'image 
             for lm in hand:
@@ -108,37 +141,14 @@ with HandLandmarker.create_from_options(options) as landmarker:
             for s, e in HAND_CONNECTIONS:
                 cv2.line(frame, (int(hand[s].x*w), int(hand[s].y*h)), (int(hand[e].x*w), int(hand[e].y*h)), (255,0,0), 2)
 
+            # Mode pointeur et mode swipe sont mutuellement exclusifs
+            if mode_actif == "pointeur":
+                positions.clear()
+                if index_en_haut:
+                    serie_index_leve += 1
+                else:
+                    serie_index_leve = 0
 
-            # Position poignet
-            poignet = hand[0]
-            positions.append((poignet.x, now))
-
-            # Détection swipe dès que dx dépasse seuil
-            if len(positions) >= MIN_FRAMES:
-                # ici detection de la premiere frame et de la derniere recuper et comparaison de la distance
-                x_old, t_old = positions[0]
-                x_new, t_new = positions[-1]
-
-                dx = x_new - x_old
-                dt = t_new - t_old
-
-                if abs(dx) > SWIPE_DISTANCE and dt < MAX_TIME:
-                    if dx > 0 and now - last_swipe_time_left > COOLDOWN:
-                        swipe_text = "SWIPE DROITE -> GAUCHE"
-                        pyautogui.press('left')
-                        print("➡ Swipe détecté : GAUCHE → DROITE")
-                        last_swipe_time_left = now
-                        positions.clear()
-                    elif dx < 0 and now - last_swipe_time_right > COOLDOWN:
-                        swipe_text = "SWIPE GAUCHE -> DROITE"
-                        pyautogui.press('right')
-                        print("⬅ Swipe détecté : DROITE → GAUCHE")
-                        last_swipe_time_right = now
-                        positions.clear()
-
-            # Pointeur lisse et stable
-            if is_index_up(hand):
-                serie_index_leve += 1
                 if serie_index_leve >= NB_FRAMES_INDEX_STABLE and (now - dernier_maj_pointeur) >= INTERVALLE_MAJ_POINTEUR:
                     # Position du bout de l'index (landmark 8)
                     bout_index = hand[8]
@@ -151,8 +161,11 @@ with HandLandmarker.create_from_options(options) as landmarker:
                         x_lisse, y_lisse = cible_x, cible_y
                     else:
                         x_precedent, y_precedent = derniere_position_pointeur
-                        x_lisse = int(x_precedent + (cible_x - x_precedent) * LISSAGE_POINTEUR)
-                        y_lisse = int(y_precedent + (cible_y - y_precedent) * LISSAGE_POINTEUR)
+                        delta_x = abs(cible_x - x_precedent)
+                        delta_y = abs(cible_y - y_precedent)
+                        coeff_lissage = LISSAGE_POINTEUR_RAPIDE if (delta_x + delta_y) > SEUIL_ACCELERATION_PX else LISSAGE_POINTEUR
+                        x_lisse = int(x_precedent + (cible_x - x_precedent) * coeff_lissage)
+                        y_lisse = int(y_precedent + (cible_y - y_precedent) * coeff_lissage)
 
                     # Evite d'envoyer des moves trop petits et couteux
                     if (
@@ -168,13 +181,42 @@ with HandLandmarker.create_from_options(options) as landmarker:
             else:
                 serie_index_leve = 0
 
+                # Position poignet
+                positions.append((poignet.x, now))
+
+                # Détection swipe dès que dx dépasse seuil
+                if len(positions) >= MIN_FRAMES:
+                    # ici detection de la premiere frame et de la derniere recuper et comparaison de la distance
+                    x_old, t_old = positions[0]
+                    x_new, t_new = positions[-1]
+
+                    dx = x_new - x_old
+                    dt = t_new - t_old
+
+                    if abs(dx) > SWIPE_DISTANCE and dt < MAX_TIME:
+                        if dx > 0 and now - last_swipe_time_left > COOLDOWN:
+                            swipe_text = "SWIPE DROITE -> GAUCHE"
+                            pyautogui.press('left')
+                            print("➡ Swipe détecté : GAUCHE → DROITE")
+                            last_swipe_time_left = now
+                            positions.clear()
+                        elif dx < 0 and now - last_swipe_time_right > COOLDOWN:
+                            swipe_text = "SWIPE GAUCHE -> DROITE"
+                            pyautogui.press('right')
+                            print("⬅ Swipe détecté : DROITE → GAUCHE")
+                            last_swipe_time_right = now
+                            positions.clear()
+
         else:
             positions.clear()
             serie_index_leve = 0
+            compteur_poing_ferme = 0
 
         # Affichage texte lors de la détection pour le débug (a terme on l'enlevera)
         if swipe_text:
             cv2.putText(frame, swipe_text, (30,60), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,0,255),3)
+
+        cv2.putText(frame, f"MODE: {mode_actif.upper()}", (30, 100), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255,255,0), 2)
 
         cv2.imshow("PowerPoint Swipe with your hand :)", frame)
 
