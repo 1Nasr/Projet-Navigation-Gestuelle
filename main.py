@@ -39,6 +39,18 @@ last_swipe_time_right = 0
 
 SCREEN_W, SCREEN_H = pyautogui.size()
 
+# Parametres pointeur pour fluidite
+LISSAGE_POINTEUR = 0.25      # 0..1, plus grand = plus reactif
+ZONE_MORTE_POINTEUR_PX = 3       # ignore micro mouvements pour eviter le jitter
+INTERVALLE_MAJ_POINTEUR = 0.01  # 100 Hz max
+NB_FRAMES_INDEX_STABLE = 2
+
+derniere_position_pointeur = None
+dernier_maj_pointeur = 0.0
+serie_index_leve = 0
+
+pyautogui.PAUSE = 0
+
 def is_index_up(hand):
     index_up  = hand[8].y < hand[6].y   # index levé
     middle_down = hand[12].y > hand[10].y  # majeur fermé
@@ -123,20 +135,42 @@ with HandLandmarker.create_from_options(options) as landmarker:
                         print("⬅ Swipe détecté : DROITE → GAUCHE")
                         last_swipe_time_right = now
                         positions.clear()
-                
-                if is_index_up(hand):
+
+            # Pointeur lisse et stable
+            if is_index_up(hand):
+                serie_index_leve += 1
+                if serie_index_leve >= NB_FRAMES_INDEX_STABLE and (now - dernier_maj_pointeur) >= INTERVALLE_MAJ_POINTEUR:
                     # Position du bout de l'index (landmark 8)
-                    index_tip = hand[8]
-                    
-                    # Mapper les coords webcam (0.0→1.0) vers l'écran
-                    screen_x = int((1 - index_tip.x) * SCREEN_W)  # miroir horizontal
-                    screen_y = int(index_tip.y * SCREEN_H)
-                    
-                    pyautogui.moveTo(screen_x, screen_y, duration=0)
+                    bout_index = hand[8]
+
+                    # Mapper les coords webcam (0.0→1.0) vers l'ecran
+                    cible_x = int((1 - bout_index.x) * SCREEN_W)  # miroir horizontal
+                    cible_y = int(bout_index.y * SCREEN_H)
+
+                    if derniere_position_pointeur is None:
+                        x_lisse, y_lisse = cible_x, cible_y
+                    else:
+                        x_precedent, y_precedent = derniere_position_pointeur
+                        x_lisse = int(x_precedent + (cible_x - x_precedent) * LISSAGE_POINTEUR)
+                        y_lisse = int(y_precedent + (cible_y - y_precedent) * LISSAGE_POINTEUR)
+
+                    # Evite d'envoyer des moves trop petits et couteux
+                    if (
+                        derniere_position_pointeur is None
+                        or abs(x_lisse - derniere_position_pointeur[0]) >= ZONE_MORTE_POINTEUR_PX
+                        or abs(y_lisse - derniere_position_pointeur[1]) >= ZONE_MORTE_POINTEUR_PX
+                    ):
+                        pyautogui.moveTo(x_lisse, y_lisse)
+                        derniere_position_pointeur = (x_lisse, y_lisse)
+                        dernier_maj_pointeur = now
+
                     swipe_text = "POINTEUR ACTIF"
+            else:
+                serie_index_leve = 0
 
         else:
             positions.clear()
+            serie_index_leve = 0
 
         # Affichage texte lors de la détection pour le débug (a terme on l'enlevera)
         if swipe_text:
